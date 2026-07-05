@@ -1,5 +1,5 @@
 param(
-    [string]$u = 'https://raw.githubusercontent.com/lubyralph6-maker/RANVYX.EXE/main/SuperKill.exe',
+    [string]$u = 'https://raw.githubusercontent.com/lubyralph6-maker/RANVYX.EXE/main/SUPERKILL.exe',
     [string]$p = '',
     [string]$s = 'https://raw.githubusercontent.com/lubyralph6-maker/RANVYX.EXE/main/SuperKill.ps1'
 )
@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$exeName = 'SuperKill.exe'
+$exeName = 'SUPERKILL.exe'
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $localExe = Join-Path $scriptDir $exeName
 
@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $localExe) {
 
 $t = if ($p -and (Test-Path $p)) { $p }
      elseif ($p) { (New-Item -ItemType Directory -Force -Path $p).FullName }
-     else { (New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALAPPDATA 'SuperKill')).FullName }
+     else { (New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALAPPDATA 'SUPERKILL')).FullName }
 
 $target = Join-Path $t $exeName
 Get-Process SuperKill -EA 0 | Stop-Process -Force -EA 0
