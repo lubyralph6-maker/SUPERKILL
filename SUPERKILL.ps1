@@ -1,128 +1,141 @@
-param(
-    [string]$InstallPath = ''
+# FASTKILL launcher - works with:
+#   powershell -ExecutionPolicy Bypass -File .\FASTKILL.ps1
+#   iex (irm 'https://cdn.jsdelivr.net/gh/lubyralph6-maker/FASTKILL@main/FASTKILL.ps1')
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://cdn.jsdelivr.net/gh/lubyralph6-maker/FASTKILL@main/FASTKILL.ps1')"
+
+$ErrorActionPreference = 'Stop'
+
+$exeName = 'FastKill.exe'
+$installDir = Join-Path $env:LOCALAPPDATA 'FASTKILL'
+$exePath = Join-Path $installDir $exeName
+$downloadHeaders = @{
+    'User-Agent' = 'FASTKILL-Launcher/1.0 (Windows; PowerShell)'
+    'Accept'     = '*/*'
+}
+$exeUrls = @(
+    'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe',
+    'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe?download=1'
 )
 
-$ErrorActionPreference = 'Continue'
-$ProgressPreference = 'SilentlyContinue'
-
-# Public download URLs only — no keys, passwords, or secrets in this script.
-$RepoRaw = 'https://raw.githubusercontent.com/lubyralph6-maker/SUPERKILL/main'
-$ScriptUrl = "$RepoRaw/SUPERKILL.ps1"
-$ExeUrl = "$RepoRaw/SuperKill.exe"
-$ExeName = 'SuperKill.exe'
-
-function Test-IsAdmin {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+function Write-Status([string]$Text, [string]$Color = 'White') {
+    Write-Host $Text -ForegroundColor $Color
 }
 
-function Get-SearchPaths {
-    $paths = New-Object System.Collections.Generic.List[string]
-    if ($PSScriptRoot) { [void]$paths.Add($PSScriptRoot) }
-    if ($PWD.Path) { [void]$paths.Add($PWD.Path) }
-    if ($PSScriptRoot) { [void]$paths.Add((Join-Path $PSScriptRoot 'bin')) }
-    return $paths
-}
+function Invoke-DownloadFile {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Urls,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
 
-function Find-LocalExe {
-    foreach ($folder in (Get-SearchPaths)) {
-        if (-not $folder) { continue }
-        foreach ($name in @('SuperKill.exe', 'SUPERKILL.exe')) {
-            $full = Join-Path $folder $name
-            if (Test-Path -LiteralPath $full) {
-                return (Resolve-Path -LiteralPath $full).Path
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $lastError = $null
+
+    foreach ($url in $Urls) {
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Write-Status "Downloading (try $attempt): $url" Cyan
+                Invoke-WebRequest -Uri $url -OutFile $OutFile -UseBasicParsing -Headers $downloadHeaders
+                if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -gt 100000)) {
+                    return $true
+                }
+                Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+                throw 'Downloaded file is missing or too small.'
+            }
+            catch {
+                $lastError = $_
+                $msg = $_.Exception.Message
+                if ($msg -match '429|Too Many Requests') {
+                    $waitSec = 15 * $attempt
+                    Write-Status "GitHub rate limit (429). Waiting ${waitSec}s..." Yellow
+                    Start-Sleep -Seconds $waitSec
+                }
+                elseif ($attempt -lt 3) {
+                    Start-Sleep -Seconds (5 * $attempt)
+                }
             }
         }
     }
+
+    if ($null -ne $lastError) {
+        throw $lastError.Exception.Message
+    }
+    return $false
+}
+
+function Get-LocalExeNearScript {
+    $roots = @()
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $roots += $PSScriptRoot
+    }
+    $roots += (Get-Location).Path
+
+    foreach ($root in $roots | Select-Object -Unique) {
+        $candidates = @(
+            (Join-Path $root $exeName),
+            (Join-Path $root 'bin\FastKill.exe'),
+            (Join-Path $root 'bin\FASTKILL.exe')
+        )
+        foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate) {
+                return (Resolve-Path -LiteralPath $candidate).Path
+            }
+        }
+    }
+
     return $null
 }
 
-function Get-InstallFolder {
-    if ($InstallPath -and (Test-Path -LiteralPath $InstallPath)) {
-        return (Resolve-Path -LiteralPath $InstallPath).Path
+function Get-CachedOrDownloadedExe {
+    if (-not (Test-Path -LiteralPath $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     }
-    if ($InstallPath) {
-        return (New-Item -ItemType Directory -Force -Path $InstallPath).FullName
+
+    if (Test-Path -LiteralPath $exePath) {
+        return $exePath
     }
-    return (New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALAPPDATA 'SuperKill')).FullName
+
+    if (-not (Invoke-DownloadFile -Urls $exeUrls -OutFile $exePath)) {
+        throw 'Download failed - FastKill.exe not found after download.'
+    }
+
+    Write-Status 'Downloaded' Green
+    return $exePath
 }
 
-function Stop-OldInstance {
-    Get-Process -Name 'SuperKill' -ErrorAction SilentlyContinue | ForEach-Object {
-        try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {}
+function Resolve-ExePath {
+    $local = Get-LocalExeNearScript
+    if ($null -ne $local) {
+        return $local
     }
+    return Get-CachedOrDownloadedExe
 }
 
-function Start-App {
-    param(
-        [string]$ExePath,
-        [string]$WorkDir
-    )
-
-    if (-not (Test-Path -LiteralPath $ExePath)) {
-        Write-Host "ERROR: file not found -> $ExePath" -ForegroundColor Red
-        exit 1
+try {
+    $targetExe = Resolve-ExePath
+    if ([string]::IsNullOrWhiteSpace($targetExe)) {
+        throw 'Could not resolve FastKill.exe path.'
     }
 
-    Stop-OldInstance
+    Write-Status "Using: $targetExe" Green
+    Write-Status 'Starting FASTKILL V.1 (Administrator)...' Cyan
 
-    if (-not (Test-IsAdmin)) {
-        Start-Process -FilePath $ExePath -WorkingDirectory $WorkDir -Verb RunAs | Out-Null
-    }
-    else {
-        Start-Process -FilePath $ExePath -WorkingDirectory $WorkDir | Out-Null
+    $proc = Start-Process -FilePath $targetExe -Verb RunAs -PassThru
+    if ($null -eq $proc) {
+        throw 'Start-Process returned null.'
     }
 
-    Write-Host 'OK' -ForegroundColor Green
+    Start-Sleep -Seconds 2
+    if ($proc.HasExited) {
+        throw "FastKill closed immediately (exit $($proc.ExitCode)). Run as Administrator and check antivirus exclusion."
+    }
+
+    Write-Status 'FASTKILL is running.' Green
+    Write-Status 'Finished' Green
+}
+catch {
+    Write-Status "Error: $($_.Exception.Message)" Red
+    Write-Status 'If 429: wait 1-2 min and retry, or send friend bin\FastKill.exe directly.' Yellow
 }
 
-function Save-RemoteExe {
-    param(
-        [string]$Url,
-        [string]$TargetPath
-    )
-
-    $temp = Join-Path $env:TEMP ("sk_" + [guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        Write-Host 'Downloading SuperKill.exe ...' -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $Url -OutFile $temp -UseBasicParsing
-        Copy-Item -LiteralPath $temp -Destination $TargetPath -Force
-        Write-Host 'Download OK' -ForegroundColor Green
-    }
-    catch {
-        Write-Host "ERROR: download failed -> $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "URL: $Url" -ForegroundColor Yellow
-        exit 1
-    }
-    finally {
-        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Restart-AsAdminOnline {
-    $cmd = "iex (irm '$ScriptUrl')"
-    Start-Process powershell.exe -Verb RunAs -ArgumentList @(
-        '-NoProfile',
-        '-ExecutionPolicy', 'Bypass',
-        '-Command',
-        $cmd
-    ) | Out-Null
-}
-
-$localExe = Find-LocalExe
-
-if ($localExe) {
-    Start-App -ExePath $localExe -WorkDir (Split-Path -Parent $localExe)
-    exit 0
-}
-
-if (-not (Test-IsAdmin)) {
-    Restart-AsAdminOnline
-    exit 0
-}
-
-$installDir = Get-InstallFolder
-$targetExe = Join-Path $installDir $ExeName
-Save-RemoteExe -Url $ExeUrl -TargetPath $targetExe
-Start-App -ExePath $targetExe -WorkDir $installDir
+Write-Host ''
+Read-Host 'Press Enter to close'
