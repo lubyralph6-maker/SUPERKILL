@@ -1,8 +1,5 @@
-# Copy to GitHub: FASTKILL.ps1
-# Run in PowerShell (Admin):
-#   iex (irm 'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FASTKILL.ps1')
-# If 429, wait 1-2 min and retry, or:
-#   1..5|%{try{iex(irm 'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FASTKILL.ps1');break}catch{sleep 20}}
+# Copy to GitHub: FASTKILL.ps1 + FastKill.exe
+# iex (irm 'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FASTKILL.ps1')
 
 $ErrorActionPreference = 'Stop'
 
@@ -15,7 +12,9 @@ try {
     Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue
 } catch {}
 
-$exe = Join-Path $env:LOCALAPPDATA 'FASTKILL\FastKill.exe'
+$dir = Join-Path $env:LOCALAPPDATA 'FASTKILL'
+$exe = Join-Path $dir 'FastKill.exe'
+$marker = Join-Path $dir '.ps1_redownload'
 $urls = @(
     'https://github.com/lubyralph6-maker/FASTKILL/raw/main/FastKill.exe',
     'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe'
@@ -35,6 +34,26 @@ function Test-FkExe([string]$Path) {
     return ([BitConverter]::ToUInt16($b, $o + 4) -eq 0x8664)
 }
 
+function Get-RemoteExeSize {
+    foreach ($url in $urls) {
+        try {
+            $r = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -Headers $hdr -TimeoutSec 20
+            $len = $r.Headers['Content-Length']
+            if ($len) { return [int64]$len }
+        } catch {}
+    }
+    return 0
+}
+
+function Clear-Ps1Cache {
+    if (Test-Path -LiteralPath $exe) {
+        Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $marker) {
+        Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-FkExe {
     foreach ($local in @(
         (Join-Path $PSScriptRoot 'bin\FastKill.exe'),
@@ -45,13 +64,26 @@ function Get-FkExe {
         if (Test-FkExe $local) { return (Resolve-Path -LiteralPath $local).Path }
     }
 
-    $dir = Split-Path $exe
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 
-    if (Test-FkExe $exe) { return $exe }
-    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
+    if (Test-Path -LiteralPath $marker) {
+        Clear-Ps1Cache
+    }
+
+    $remoteSize = Get-RemoteExeSize
+    if ((Test-Path -LiteralPath $exe) -and (Test-FkExe $exe)) {
+        if ($remoteSize -gt 0 -and (Get-Item -LiteralPath $exe).Length -ne $remoteSize) {
+            Clear-Ps1Cache
+        } else {
+            return $exe
+        }
+    }
+
+    if (Test-Path -LiteralPath $exe) {
+        Clear-Ps1Cache
+    }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $err = $null
@@ -60,7 +92,7 @@ function Get-FkExe {
             try {
                 Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -Headers $hdr
                 if (Test-FkExe $exe) { return $exe }
-                Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+                Clear-Ps1Cache
                 throw 'bad exe'
             } catch {
                 $err = $_
